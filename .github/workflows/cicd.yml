@@ -19,7 +19,6 @@ permissions:
   id-token: write   # Required for GitHub OIDC
 
 jobs:
-  # 1) CI: install + build
   ci:
     runs-on: self-hosted
     strategy:
@@ -44,7 +43,6 @@ jobs:
         working-directory: ${{ matrix.service.workdir }}
         run: ${{ matrix.service.build }}
 
-  # 2) Docker: build & push to ECR
   docker:
     runs-on: self-hosted
     needs: ci
@@ -86,7 +84,6 @@ jobs:
             ${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}
             ${{ env.ECR_REGISTRY }}/frontend:latest
 
-  # 3) Deploy to EKS
   deploy:
     runs-on: self-hosted
     needs: docker
@@ -99,28 +96,22 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::958978679682:role/opengit-GitHubActions
           role-session-name: GitHubActions-Deploy
-      - name: Verify AWS credentials
-        run: |
-          aws sts get-caller-identity
-          aws eks describe-cluster --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
-      - name: Update kubeconfig for EKS
-        run: |
-          aws eks update-kubeconfig \
-            --name "${{ secrets.EKS_CLUSTER_NAME }}" \
-            --region "${{ env.AWS_REGION }}"
-      - name: Verify kubectl access
-        run: kubectl config view --minify && kubectl get nodes
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
       - name: Ensure namespace exists
         run: |
-          kubectl get namespace "${{ env.K8S_NAMESPACE }}" || \
-          kubectl create namespace "${{ env.K8S_NAMESPACE }}"
-      - name: Apply Kubernetes Manifests
-        run: kubectl apply -f Kubernetes-Manifests-file/ -n "${{ env.K8S_NAMESPACE }}"
-      - name: Update deployment images
+          kubectl get namespace "${{ env.K8S_NAMESPACE }}" || kubectl create namespace "${{ env.K8S_NAMESPACE }}"
+      - name: Apply backend manifest
         run: |
-          # Deployment name is "api", container name is "backend"
+          kubectl apply -f Application-Code/backend/api-deployment.yaml -n "${{ env.K8S_NAMESPACE }}"
+      - name: Apply frontend manifest
+        run: |
+          kubectl apply -f Application-Code/frontend/frontend-deployment.yaml -n "${{ env.K8S_NAMESPACE }}"
+      - name: Update backend image
+        run: |
           kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/api backend="${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}"
-          # Update frontend
+      - name: Update frontend image
+        run: |
           kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/frontend frontend="${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}"
       - name: Wait for rollout (backend)
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/api --timeout=120s

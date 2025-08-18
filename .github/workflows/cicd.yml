@@ -8,18 +8,18 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}         # e.g., us-east-1
-  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} # 12-digit AWS account id
+  AWS_REGION: ${{ secrets.AWS_REGION }}         # e.g., ap-south-1
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}  # Your 12-digit AWS account ID
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
   IMAGE_TAG: ${{ github.sha }}
   K8S_NAMESPACE: three-tier
 
 permissions:
   contents: read
-  id-token: write   # needed for AWS OIDC (no long-lived keys)
+  id-token: write   # Required for AWS OIDC authentication
 
 jobs:
-  # 1) Basic CI: install + build (no tests in repo)
+  # 1) Basic CI: install + build
   ci:
     name: Install & Build
     runs-on: self-hosted
@@ -127,12 +127,12 @@ jobs:
           aws sts get-caller-identity
           aws eks describe-cluster --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
 
+      # FIXED: Removed redundant --role-arn parameter
       - name: Update kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
             --name "${{ secrets.EKS_CLUSTER_NAME }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --role-arn "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+            --region "${{ env.AWS_REGION }}"
 
       - name: Verify kubectl access
         run: kubectl config view --minify && kubectl get nodes

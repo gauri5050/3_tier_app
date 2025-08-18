@@ -39,7 +39,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "16"   # matches your Dockerfiles (node:14 is used in containers; 16 is safe for CI)
+          node-version: "16"
 
       - name: Install dependencies
         working-directory: ${{ matrix.service.workdir }}
@@ -63,12 +63,12 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}  # e.g., arn:aws:iam::<acct>:role/GitHubActionsECRRole
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
       - name: Login to ECR
         run: |
-          aws ecr get-login-password --region "${AWS_REGION}" \
-            | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ env.ECR_REGISTRY }}"
 
       - name: Ensure ECR repositories exist
         run: |
@@ -104,7 +104,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # 3) Deploy to Kubernetes (EKS or other cluster reachable via aws eks update-kubeconfig)
+  # 3) Deploy to Kubernetes (EKS)
   deploy:
     name: Deploy to Kubernetes
     runs-on: self-hosted
@@ -124,21 +124,24 @@ jobs:
         run: |
           aws eks update-kubeconfig \
             --name "${{ secrets.EKS_CLUSTER_NAME }}" \
-            --region "${AWS_REGION}"
+            --region "${{ env.AWS_REGION }}"
 
-      # Apply (creates namespace, svc, ingress, etc. if missing)
+      - name: Ensure namespace exists
+        run: |
+          kubectl get namespace "${{ env.K8S_NAMESPACE }}" || \
+          kubectl create namespace "${{ env.K8S_NAMESPACE }}"
+
       - name: Apply Kubernetes Manifests
         run: |
-          kubectl apply -f Kubernetes-Manifests-file/
+          kubectl apply -f Kubernetes-Manifests-file/ -n "${{ env.K8S_NAMESPACE }}"
 
-      # Update images to the freshly pushed SHAs
-      - name: Set images to new tag
+      - name: Update images with new tag
         run: |
-          kubectl -n "${K8S_NAMESPACE}" set image deployment/api api="${ECR_REGISTRY}/backend:${IMAGE_TAG}"
-          kubectl -n "${K8S_NAMESPACE}" set image deployment/frontend frontend="${ECR_REGISTRY}/frontend:${IMAGE_TAG}"
+          kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/backend backend="${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}"
+          kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/frontend frontend="${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}"
 
       - name: Wait for rollout (backend)
-        run: kubectl -n "${K8S_NAMESPACE}" rollout status deployment/api --timeout=120s
+        run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/backend --timeout=120s
 
       - name: Wait for rollout (frontend)
-        run: kubectl -n "${K8S_NAMESPACE}" rollout status deployment/frontend --timeout=120s
+        run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/frontend --timeout=120s

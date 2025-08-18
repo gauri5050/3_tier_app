@@ -16,7 +16,7 @@ env:
 
 permissions:
   contents: read
-  id-token: write   # Required for GitHub OIDC
+  id-token: write
 
 jobs:
   ci:
@@ -96,38 +96,51 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: arn:aws:iam::958978679682:role/opengit-GitHubActions
           role-session-name: GitHubActions-Deploy
-
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
-
       - name: Ensure namespace exists
         run: |
           kubectl get namespace "${{ env.K8S_NAMESPACE }}" || kubectl create namespace "${{ env.K8S_NAMESPACE }}"
-
-      # 1️⃣ Deploy MongoDB stack first
-      - name: Apply MongoDB secrets
-        run: kubectl apply -f Kubernetes-Manifests-file/Database/secrets.yaml -n "${{ env.K8S_NAMESPACE }}"
-      - name: Apply MongoDB PV
-        run: kubectl apply -f Kubernetes-Manifests-file/Database/pv.yaml -n "${{ env.K8S_NAMESPACE }}"
-      - name: Apply MongoDB PVC
-        run: kubectl apply -f Kubernetes-Manifests-file/Database/pvc.yaml -n "${{ env.K8S_NAMESPACE }}"
-      - name: Apply MongoDB Deployment
-        run: kubectl apply -f Kubernetes-Manifests-file/Database/deployment.yaml -n "${{ env.K8S_NAMESPACE }}"
-      - name: Apply MongoDB Service
-        run: kubectl apply -f Kubernetes-Manifests-file/Database/service.yaml -n "${{ env.K8S_NAMESPACE }}"
-
-      # 2️⃣ Deploy backend and frontend
+      
+      # Apply Kubernetes manifests
+      - name: Apply Mongo manifests
+        run: |
+          kubectl apply -f Kubernetes-Manifests-file/Backend/mongo-secrets.yaml -n "${{ env.K8S_NAMESPACE }}"
+          kubectl apply -f Kubernetes-Manifests-file/Backend/pv.yaml -n "${{ env.K8S_NAMESPACE }}"
+          kubectl apply -f Kubernetes-Manifests-file/Backend/pvc.yaml -n "${{ env.K8S_NAMESPACE }}"
+          kubectl apply -f Kubernetes-Manifests-file/Backend/deployment.yaml -n "${{ env.K8S_NAMESPACE }}"
+          kubectl apply -f Kubernetes-Manifests-file/Backend/service.yaml -n "${{ env.K8S_NAMESPACE }}"
+      
       - name: Apply Backend manifest
         run: kubectl apply -f Kubernetes-Manifests-file/Backend/deployment.yaml -n "${{ env.K8S_NAMESPACE }}"
       - name: Apply Frontend manifest
         run: kubectl apply -f Kubernetes-Manifests-file/Frontend/deployment.yaml -n "${{ env.K8S_NAMESPACE }}"
-
+      
+      # Update images
       - name: Update Backend image
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/api backend="${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}"
       - name: Update Frontend image
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/frontend frontend="${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}"
-
+      
+      # Wait for rollout
       - name: Wait for rollout (Backend)
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/api --timeout=120s
       - name: Wait for rollout (Frontend)
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/frontend --timeout=120s
+      
+      # Verification steps
+      - name: Test Backend → MongoDB connectivity
+        run: |
+          BACKEND_POD=$(kubectl get pods -n "${{ env.K8S_NAMESPACE }}" -l role=api -o jsonpath='{.items[0].metadata.name}')
+          echo "Testing MongoDB connection from pod: $BACKEND_POD"
+          kubectl exec -n "${{ env.K8S_NAMESPACE }}" $BACKEND_POD -- bash -c \
+            'apt-get update && apt-get install -y mongodb-clients >/dev/null 2>&1; \
+             mongo --host mongodb-svc --port 27017 --eval "db.getMongo()"'
+      
+      - name: Check Backend pod logs
+        run: kubectl logs -n "${{ env.K8S_NAMESPACE }}" deployment/api --tail=20
+      
+      - name: Verify Frontend pod readiness
+        run: |
+          kubectl get pods -n "${{ env.K8S_NAMESPACE }}" -l role=frontend -o wide
+          kubectl wait --for=condition=Ready pod -l role=frontend -n "${{ env.K8S_NAMESPACE }}" --timeout=60s

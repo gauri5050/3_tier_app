@@ -22,7 +22,7 @@ jobs:
   # 1) Basic CI: install + build (no tests in repo)
   ci:
     name: Install & Build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         service:
@@ -53,7 +53,7 @@ jobs:
   # 2) Build & Push container images to AWS ECR
   docker:
     name: Build & Push Images (ECR)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: ci
     steps:
       - name: Checkout
@@ -107,7 +107,7 @@ jobs:
   # 3) Deploy to Kubernetes (EKS or other cluster reachable via aws eks update-kubeconfig)
   deploy:
     name: Deploy to Kubernetes
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: docker
     if: github.ref == 'refs/heads/main'
     steps:

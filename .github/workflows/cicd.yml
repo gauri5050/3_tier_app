@@ -2,9 +2,9 @@ name: CI-CD (Three-Tier App)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 env:
@@ -59,7 +59,7 @@ jobs:
       - name: Login to ECR
         run: |
           aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
-            | docker login --username AWS --password-stdin "${{ env.ECR_REGISTRY }}"
+          | docker login --username AWS --password-stdin "${{ env.ECR_REGISTRY }}"
       - name: Ensure ECR repositories exist
         run: |
           for REPO in backend frontend; do
@@ -118,9 +118,11 @@ jobs:
         run: kubectl apply -f Kubernetes-Manifests-file/ -n "${{ env.K8S_NAMESPACE }}"
       - name: Update deployment images
         run: |
-          kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/backend backend="${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}"
+          # Update backend (Deployment name is "api", container name is "backend")
+          kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/api backend="${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}"
+          # Update frontend
           kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/frontend frontend="${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}"
       - name: Wait for rollout (backend)
-        run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/backend --timeout=120s
+        run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/api --timeout=120s
       - name: Wait for rollout (frontend)
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/frontend --timeout=120s

@@ -8,20 +8,19 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}         # e.g., ap-south-1
-  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}  # Your 12-digit AWS account ID
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
   IMAGE_TAG: ${{ github.sha }}
   K8S_NAMESPACE: three-tier
 
 permissions:
   contents: read
-  id-token: write   # Required for AWS OIDC authentication
+  id-token: write   # Required for GitHub OIDC
 
 jobs:
-  # 1) Basic CI: install + build
+  # 1) CI: install + build
   ci:
-    name: Install & Build
     runs-on: self-hosted
     strategy:
       matrix:
@@ -31,56 +30,43 @@ jobs:
             build: "npm run build"
           - name: backend
             workdir: Application-Code/backend
-            build: "" # backend has no build step; install only
+            build: ""
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "16"
-
       - name: Install dependencies
         working-directory: ${{ matrix.service.workdir }}
         run: npm ci
-
       - name: Build (if applicable)
         if: ${{ matrix.service.build != '' }}
         working-directory: ${{ matrix.service.workdir }}
         run: ${{ matrix.service.build }}
 
-  # 2) Build & Push container images to AWS ECR
+  # 2) Docker: build & push to ECR
   docker:
-    name: Build & Push Images (ECR)
     runs-on: self-hosted
     needs: ci
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: arn:aws:iam::958978679682:role/opengit-GitHubActions
           role-session-name: GitHubActions-ECR
-
       - name: Login to ECR
         run: |
           aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
             | docker login --username AWS --password-stdin "${{ env.ECR_REGISTRY }}"
-
       - name: Ensure ECR repositories exist
         run: |
           for REPO in backend frontend; do
             aws ecr describe-repositories --repository-names "$REPO" >/dev/null 2>&1 || \
             aws ecr create-repository --repository-name "$REPO" >/dev/null
           done
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      - uses: docker/setup-buildx-action@v3
       - name: Build & push backend
         uses: docker/build-push-action@v5
         with:
@@ -90,9 +76,6 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}
             ${{ env.ECR_REGISTRY }}/backend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Build & push frontend
         uses: docker/build-push-action@v5
         with:
@@ -102,57 +85,42 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}
             ${{ env.ECR_REGISTRY }}/frontend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-  # 3) Deploy to Kubernetes (EKS)
+  # 3) Deploy to EKS
   deploy:
-    name: Deploy to Kubernetes
     runs-on: self-hosted
     needs: docker
     if: github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: arn:aws:iam::958978679682:role/opengit-GitHubActions
           role-session-name: GitHubActions-Deploy
-
       - name: Verify AWS credentials
         run: |
           aws sts get-caller-identity
           aws eks describe-cluster --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
-
-      # FIXED: Removed redundant --role-arn parameter
       - name: Update kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
             --name "${{ secrets.EKS_CLUSTER_NAME }}" \
             --region "${{ env.AWS_REGION }}"
-
       - name: Verify kubectl access
         run: kubectl config view --minify && kubectl get nodes
-
       - name: Ensure namespace exists
         run: |
           kubectl get namespace "${{ env.K8S_NAMESPACE }}" || \
           kubectl create namespace "${{ env.K8S_NAMESPACE }}"
-
       - name: Apply Kubernetes Manifests
-        run: |
-          kubectl apply -f Kubernetes-Manifests-file/ -n "${{ env.K8S_NAMESPACE }}"
-
-      - name: Update images with new tag
+        run: kubectl apply -f Kubernetes-Manifests-file/ -n "${{ env.K8S_NAMESPACE }}"
+      - name: Update deployment images
         run: |
           kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/backend backend="${{ env.ECR_REGISTRY }}/backend:${{ env.IMAGE_TAG }}"
           kubectl -n "${{ env.K8S_NAMESPACE }}" set image deployment/frontend frontend="${{ env.ECR_REGISTRY }}/frontend:${{ env.IMAGE_TAG }}"
-
       - name: Wait for rollout (backend)
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/backend --timeout=120s
-
       - name: Wait for rollout (frontend)
         run: kubectl -n "${{ env.K8S_NAMESPACE }}" rollout status deployment/frontend --timeout=120s

@@ -1,8 +1,7 @@
-FROM node:14
+FROM node:18
 
 WORKDIR /usr/src/app
 
-# Install Mongo CLI
 RUN apt-get update && apt-get install -y mongodb-clients
 
 COPY package*.json ./

@@ -16,7 +16,7 @@ env:
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write   # Required for GitHub OIDC
 
 jobs:
   ci:
@@ -132,11 +132,13 @@ jobs:
       # Verification steps
       - name: Test Backend → MongoDB connectivity
         run: |
-          BACKEND_POD=$(kubectl get pods -n "${{ env.K8S_NAMESPACE }}" -l role=api -o jsonpath='{.items[0].metadata.name}')
-          echo "Testing MongoDB connection from pod: $BACKEND_POD"
-          kubectl exec -n "${{ env.K8S_NAMESPACE }}" $BACKEND_POD -- bash -c \
-            'apt-get update && apt-get install -y mongodb-clients >/dev/null 2>&1; \
-             mongo --host mongodb-svc --port 27017 --eval "db.getMongo()"'
+          echo "Testing MongoDB connection using a temporary mongo client container"
+          kubectl run mongo-test \
+            --rm -i --tty \
+            --image=mongo:5.0 \
+            --restart=Never \
+            --namespace="${{ env.K8S_NAMESPACE }}" \
+            -- bash -c 'mongo --host mongodb-svc --port 27017 --eval "db.getMongo()"'
       - name: Check Backend pod logs
         run: kubectl logs -n "${{ env.K8S_NAMESPACE }}" deployment/api --tail=20
       - name: Verify Frontend pod readiness

@@ -163,7 +163,7 @@ jobs:
       # Apply Ingress
       - name: Apply Ingress manifests
         run: |
-          kubectl apply -f Kubernetes-Manifests-file/Frontend/ingress.yaml -n "${{ env.K8S_NAMESPACE }}"
+          kubectl apply -f ./Kubernetes-Manifests-file/ingress.yaml -n "${{ env.K8S_NAMESPACE }}"
 
       # Print ALB hostname
       - name: Show ALB hostname

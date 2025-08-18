@@ -2,7 +2,10 @@ FROM node:18
 
 WORKDIR /usr/src/app
 
-RUN apt-get update && apt-get install -y mongodb-clients
+# Install mongo client tools
+RUN apt-get update \
+    && apt-get install -y mongo-tools \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm install

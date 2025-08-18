@@ -64,6 +64,7 @@ jobs:
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GitHubActions-ECR
 
       - name: Login to ECR
         run: |
@@ -119,12 +120,22 @@ jobs:
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GitHubActions-EKS
+
+      - name: Verify AWS credentials
+        run: |
+          aws sts get-caller-identity
+          aws eks describe-cluster --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
 
       - name: Update kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
             --name "${{ secrets.EKS_CLUSTER_NAME }}" \
-            --region "${{ env.AWS_REGION }}"
+            --region "${{ env.AWS_REGION }}" \
+            --role-arn "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+
+      - name: Verify kubectl access
+        run: kubectl config view --minify && kubectl get nodes
 
       - name: Ensure namespace exists
         run: |
